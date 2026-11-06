@@ -356,3 +356,18 @@ def test_anyone_can_chat_after_game_over():
     lobby.tick(T0 + 600)
     out = lobby.send_chat(ps["h0"].id, ps["s0"].id, "meet at the gate", T0 + 601)
     assert next(r for r, m in out if m["t"] == "chat") == [ps["s0"].id]
+
+
+# ---------- lobby password ----------
+def test_lobby_password_hashing():
+    lobby = Lobby(id="P", name="pw", created_at=T0)
+    assert not lobby.locked and lobby.check_password("anything")
+    lobby.set_password("  secret  ")          # surrounding whitespace ignored
+    assert lobby.locked and lobby.password_hash != b"secret"
+    assert lobby.check_password("secret") and lobby.check_password(" secret")
+    assert not lobby.check_password("Secret") and not lobby.check_password("")
+    assert "secret" not in repr(lobby)
+    with pytest.raises(GameError):
+        lobby.set_password("x" * 65)
+    lobby.set_password("")
+    assert not lobby.locked

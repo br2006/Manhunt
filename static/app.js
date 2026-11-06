@@ -100,10 +100,10 @@
       ul.innerHTML = lobbies.map((l) => `
         <li class="lobby-item">
           <div>
-            <strong>${esc(l.name)}</strong>
+            <strong>${l.locked ? '🔒 ' : ''}${esc(l.name)}</strong>
             <div class="muted small-text">Host: ${esc(l.host || '?')} · ${l.players} player${l.players === 1 ? '' : 's'} (min ${l.min_players})</div>
           </div>
-          <button class="primary small" data-join="${esc(l.id)}">Join</button>
+          <button class="primary small" data-join="${esc(l.id)}" data-locked="${l.locked ? 1 : ''}" data-name="${esc(l.name)}">Join</button>
         </li>`).join('');
       $('lobby-empty').classList.toggle('hidden', lobbies.length > 0);
     } catch { /* offline; try again later */ }
@@ -119,17 +119,39 @@
   async function createLobby() {
     const nick = nickname(); if (!nick) return;
     try {
-      const s = await api('/api/lobbies', { lobby_name: $('lobby-name').value, nickname: nick });
+      const s = await api('/api/lobbies', {
+        lobby_name: $('lobby-name').value, nickname: nick, password: $('lobby-password').value,
+      });
+      $('lobby-password').value = '';
       enterSession(s);
     } catch (e) { toast(e.message, 'error'); }
   }
 
-  async function joinLobby(id) {
+  async function joinLobby(id, password = '') {
     const nick = nickname(); if (!nick) return;
     try {
-      const s = await api(`/api/lobbies/${encodeURIComponent(id)}/join`, { nickname: nick });
+      const s = await api(`/api/lobbies/${encodeURIComponent(id)}/join`, { nickname: nick, password });
+      closeModal();
       enterSession(s);
-    } catch (e) { toast(e.message, 'error'); refreshLobbies(); }
+    } catch (e) {
+      if (S.modalKind === 'password') { $('join-pw-error').textContent = e.message; $('join-pw').select(); }
+      else { toast(e.message, 'error'); refreshLobbies(); }
+    }
+  }
+
+  function askPasswordAndJoin(id, name) {
+    if (!nickname()) return;
+    openModal('password', `🔒 Join ${name}`, `
+      <p class="muted">The host set a password for this lobby.</p>
+      <form id="join-pw-form" class="chat-form">
+        <input id="join-pw" type="password" maxlength="64" placeholder="Lobby password"
+               autocomplete="off" autocapitalize="off" spellcheck="false" enterkeyhint="go">
+        <button type="submit" class="primary small">Join</button>
+      </form>
+      <p id="join-pw-error" class="warn-text"></p>`,
+      [['Cancel', 'ghost', closeModal]]);
+    $('join-pw-form').onsubmit = (e) => { e.preventDefault(); joinLobby(id, $('join-pw').value); };
+    $('join-pw').focus();
   }
 
   function enterSession(s) {
@@ -574,7 +596,11 @@
   $('nickname').value = localStorage.getItem('manhunt_nick') || '';
   $('btn-create').onclick = createLobby;
   $('btn-refresh').onclick = refreshLobbies;
-  $('lobby-list').onclick = (e) => { const id = e.target.dataset.join; if (id) joinLobby(id); };
+  $('lobby-list').onclick = (e) => {
+    const b = e.target.closest('[data-join]'); if (!b) return;
+    if (b.dataset.locked) askPasswordAndJoin(b.dataset.join, b.dataset.name);
+    else joinLobby(b.dataset.join);
+  };
   $('btn-perms').onclick = requestPermissions;
   $('btn-leave-room').onclick = leave;
   $('btn-leave-game').onclick = leave;

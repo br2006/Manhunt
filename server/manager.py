@@ -9,9 +9,16 @@ from typing import Optional
 
 from fastapi import WebSocket
 
-from .game import ENDED, LOBBY, GameError, Lobby, Outbox, Player, view_for
+from .game import ENDED, LOBBY, GameError, Lobby, Outbox, PasswordError, Player, view_for
 
 log = logging.getLogger("manhunt")
+
+JOIN_FAIL_WINDOW_S = 60    # wrong-password attempts are limited per (client IP, lobby)
+JOIN_FAIL_MAX = 5
+
+
+class TooManyAttempts(GameError):
+    pass
 
 ENDED_TTL_S = 30 * 60
 IDLE_TTL_S = 30 * 60
@@ -29,27 +36,39 @@ class Manager:
         self.lobbies: dict[str, Lobby] = {}
         self.tokens: dict[str, tuple[str, str]] = {}         # token -> (lobby_id, player_id)
         self.sockets: dict[tuple[str, str], WebSocket] = {}  # (lobby_id, player_id) -> ws
+        self.join_failures: dict[tuple[str, str], list[float]] = {}  # (client, lobby_id) -> times
 
     # ---------- REST-facing ----------
     def open_lobbies(self) -> list[dict]:
         return [l.summary() for l in self.lobbies.values() if l.phase == LOBBY]
 
-    def create_lobby(self, lobby_name: str, nickname: str) -> tuple[Lobby, Player]:
+    async def create_lobby(self, lobby_name: str, nickname: str, password: str = "") -> tuple[Lobby, Player]:
         if len(self.lobbies) >= MAX_LOBBIES:
             raise GameError("Server is full, try again later")
         name = " ".join(str(lobby_name or "").split())[:MAX_LOBBY_NAME] or "Manhunt"
         t = now()
         lobby = Lobby(id=secrets.token_urlsafe(6), name=name, created_at=t, last_activity=t)
         player = lobby.add_player(nickname, t)
+        # Hashing is deliberately slow; keep it off the event loop. The lobby isn't shared yet.
+        await asyncio.to_thread(lobby.set_password, password)
         self.lobbies[lobby.id] = lobby
         self.tokens[player.token] = (lobby.id, player.id)
         return lobby, player
 
-    async def join_lobby(self, lobby_id: str, nickname: str) -> tuple[Lobby, Player]:
+    async def join_lobby(self, lobby_id: str, nickname: str, password: str = "", client: str = "?") -> tuple[Lobby, Player]:
         lobby = self.lobbies.get(lobby_id)
         if lobby is None:
             raise GameError("Lobby not found")
         t = now()
+        if lobby.locked:
+            key = (client, lobby_id)
+            fails = [x for x in self.join_failures.get(key, []) if t - x < JOIN_FAIL_WINDOW_S]
+            if len(fails) >= JOIN_FAIL_MAX:
+                raise TooManyAttempts("Too many wrong passwords. Wait a minute and try again")
+            if not await asyncio.to_thread(lobby.check_password, password):
+                self.join_failures[key] = fails + [t]
+                raise PasswordError("Wrong password" if password else "This lobby needs a password")
+            self.join_failures.pop(key, None)
         player = lobby.add_player(nickname, t)
         self.tokens[player.token] = (lobby.id, player.id)
         await self.deliver(lobby, [([p.id], view_for(lobby, p, t)) for p in lobby.players.values()])
@@ -202,6 +221,9 @@ class Manager:
             await asyncio.sleep(1)
 
     async def tick_once(self, t: float) -> None:
+        for key, times in list(self.join_failures.items()):
+            if not times or t - times[-1] >= JOIN_FAIL_WINDOW_S:
+                del self.join_failures[key]
         for lobby in list(self.lobbies.values()):
             await self.deliver(lobby, lobby.tick(t))
             anyone = any(p.connected for p in lobby.players.values())

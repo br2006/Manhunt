@@ -67,3 +67,30 @@ def test_full_game_over_websockets():
 
             lobby = main.manager.lobbies[lid]
             assert [p.name for p in lobby.team(HIDER)] == ["Bob"]
+
+
+def test_password_protected_lobby():
+    main.manager.__init__()
+    with TestClient(main.app) as client:
+        host = client.post("/api/lobbies", json={"lobby_name": "Secret", "nickname": "Alice", "password": "hunter2"}).json()
+        lid = host["lobby_id"]
+        listed = client.get("/api/lobbies").json()
+        assert listed[0]["locked"] is True and "password" not in str(listed).lower().replace("locked", "")
+
+        join = lambda pw, nick="Bob": client.post(f"/api/lobbies/{lid}/join", json={"nickname": nick, "password": pw})
+        r = join("")
+        assert r.status_code == 403 and "needs a password" in r.json()["detail"]
+        r = join("wrong")
+        assert r.status_code == 403 and r.json()["detail"] == "Wrong password"
+        assert join("hunter2").status_code == 200
+        assert join(" hunter2 ", "Cat").status_code == 200   # stray spaces from phone keyboards are fine
+
+        # Brute force is throttled: 5 wrong guesses per minute, then even the right one is refused.
+        for _ in range(5):
+            assert join("guess", "Dan").status_code == 403
+        r = join("hunter2", "Dan")
+        assert r.status_code == 429
+
+        # Open lobbies still work without any password.
+        open_l = client.post("/api/lobbies", json={"nickname": "Eve"}).json()
+        assert client.post(f"/api/lobbies/{open_l['lobby_id']}/join", json={"nickname": "Fay"}).status_code == 200

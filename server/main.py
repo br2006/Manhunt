@@ -5,12 +5,12 @@ import asyncio
 from contextlib import asynccontextmanager
 from pathlib import Path
 
-from fastapi import FastAPI, HTTPException, WebSocket
+from fastapi import FastAPI, HTTPException, Request, WebSocket
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 
-from .game import GameError
-from .manager import Manager
+from .game import GameError, PasswordError
+from .manager import Manager, TooManyAttempts
 
 STATIC_DIR = Path(__file__).resolve().parent.parent / "static"
 
@@ -32,14 +32,21 @@ app = FastAPI(title="Manhunt", lifespan=lifespan)
 class CreateBody(BaseModel):
     lobby_name: str = ""
     nickname: str
+    password: str = ""  # blank = open lobby
 
 
 class JoinBody(BaseModel):
     nickname: str
+    password: str = ""
 
 
 def session_reply(lobby, player) -> dict:
     return {"lobby_id": lobby.id, "player_id": player.id, "token": player.token}
+
+
+def http_error(e: GameError) -> HTTPException:
+    code = 429 if isinstance(e, TooManyAttempts) else 403 if isinstance(e, PasswordError) else 400
+    return HTTPException(code, str(e))
 
 
 @app.get("/api/lobbies")
@@ -48,19 +55,20 @@ def list_lobbies():
 
 
 @app.post("/api/lobbies")
-def create_lobby(body: CreateBody):
+async def create_lobby(body: CreateBody):
     try:
-        return session_reply(*manager.create_lobby(body.lobby_name, body.nickname))
+        return session_reply(*await manager.create_lobby(body.lobby_name, body.nickname, body.password))
     except GameError as e:
-        raise HTTPException(400, str(e))
+        raise http_error(e)
 
 
 @app.post("/api/lobbies/{lobby_id}/join")
-async def join_lobby(lobby_id: str, body: JoinBody):
+async def join_lobby(lobby_id: str, body: JoinBody, request: Request):
+    client = request.client.host if request.client else "?"
     try:
-        return session_reply(*await manager.join_lobby(lobby_id, body.nickname))
+        return session_reply(*await manager.join_lobby(lobby_id, body.nickname, body.password, client))
     except GameError as e:
-        raise HTTPException(400, str(e))
+        raise http_error(e)
 
 
 @app.websocket("/ws")

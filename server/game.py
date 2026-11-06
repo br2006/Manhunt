@@ -6,6 +6,8 @@ tuples, where ``recipients`` is a list of player ids. The transport layer
 """
 from __future__ import annotations
 
+import hashlib
+import hmac
 import secrets
 from dataclasses import dataclass, field, fields
 from typing import Optional
@@ -29,6 +31,18 @@ Outbox = list[tuple[list[str], dict]]
 
 class GameError(Exception):
     """A client did something it is not allowed to; message is shown to them."""
+
+
+class PasswordError(GameError):
+    """Wrong or missing lobby password."""
+
+
+MAX_PASSWORD_LEN = 64
+
+
+def hash_password(password: str, salt: bytes) -> bytes:
+    # scrypt (~50 ms) makes guessing slow even if lobby memory were ever exposed.
+    return hashlib.scrypt(password.encode(), salt=salt, n=2**14, r=8, p=1)
 
 
 @dataclass
@@ -157,6 +171,9 @@ class Lobby:
     last_hider_map_at: Optional[float] = None
     last_seeker_map_at: Optional[float] = None
     last_activity: float = 0.0
+    # Optional join password: only a salted hash is kept, never the password itself.
+    password_salt: Optional[bytes] = field(default=None, repr=False)
+    password_hash: Optional[bytes] = field(default=None, repr=False)
 
     # ---------- helpers ----------
     def team(self, team: str) -> list[Player]:
@@ -179,6 +196,28 @@ class Lobby:
         if self.phase not in phases:
             raise GameError("Not allowed right now")
 
+    # ---------- password ----------
+    @property
+    def locked(self) -> bool:
+        return self.password_hash is not None
+
+    def set_password(self, password) -> None:
+        """Blank password = open lobby. Surrounding whitespace is ignored (phone keyboards add it)."""
+        password = str(password or "").strip()
+        if len(password) > MAX_PASSWORD_LEN:
+            raise GameError(f"Password must be at most {MAX_PASSWORD_LEN} characters")
+        if not password:
+            self.password_salt = self.password_hash = None
+            return
+        self.password_salt = secrets.token_bytes(16)
+        self.password_hash = hash_password(password, self.password_salt)
+
+    def check_password(self, password) -> bool:
+        if self.password_hash is None or self.password_salt is None:
+            return True
+        password = str(password or "").strip()[:MAX_PASSWORD_LEN]
+        return hmac.compare_digest(hash_password(password, self.password_salt), self.password_hash)
+
     def summary(self) -> dict:
         host = self.players.get(self.host_id)
         return {
@@ -188,6 +227,7 @@ class Lobby:
             "players": len(self.players),
             "min_players": self.settings.min_players,
             "phase": self.phase,
+            "locked": self.locked,
         }
 
     def _states(self, now: float) -> Outbox:
@@ -565,7 +605,11 @@ def view_for(lobby: Lobby, player: Player, now: float) -> dict:
         "you": {"id": player.id, "name": player.name, "team": player.team, "is_host": player.id == lobby.host_id},
     }
     in_game = lobby.phase in (HEAD_START, ACTIVE)
-    if in_game and player.team == HIDER:
+    if lobby.phase == ENDED:
+        # Game over: everyone may see everyone so people can regroup (see Lobby._refresh_all_map).
+        view["all_map"] = [e for e in lobby.last_all_map if e["id"] in lobby.players]  # drop leavers
+        view["all_map_at"] = lobby.last_all_map_at
+    elif in_game and player.team == HIDER:
         hider_ids = set(lobby.ids(HIDER))
         view["hider_map"] = [e for e in lobby.last_hider_map if e["id"] in hider_ids]
         view["hider_map_at"] = lobby.last_hider_map_at
