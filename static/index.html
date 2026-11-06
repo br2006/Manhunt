@@ -1,0 +1,159 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <meta name="theme-color" content="#14181f">
+  <title>Manhunt</title>
+  <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.min.css">
+  <link rel="stylesheet" href="style.css">
+</head>
+<body>
+  <div id="banner" class="banner hidden"></div>
+
+  <!-- HOME -->
+  <section id="screen-home" class="screen">
+    <header class="hero">
+      <h1>Manhunt</h1>
+      <p class="muted">Real-world hide &amp; seek. Hiders see each other; seekers follow the compass.</p>
+    </header>
+
+    <div class="card">
+      <label for="nickname">Your nickname</label>
+      <input id="nickname" maxlength="24" autocomplete="nickname" placeholder="e.g. Shadow">
+    </div>
+
+
+    <div class="card">
+      <h2>Create a lobby</h2>
+      <input id="lobby-name" maxlength="32" placeholder="Lobby name (optional)">
+      <button id="btn-create" class="primary">Create lobby</button>
+    </div>
+
+    <div class="card">
+      <div class="row-between">
+        <h2>Open lobbies</h2>
+        <button id="btn-refresh" class="ghost small">Refresh</button>
+      </div>
+      <ul id="lobby-list" class="list"></ul>
+      <p id="lobby-empty" class="muted">No open lobbies yet. Create one!</p>
+    </div>
+  </section>
+
+  <!-- LOBBY ROOM -->
+  <section id="screen-room" class="screen hidden">
+    <div class="row-between">
+      <h1 id="room-name">Lobby</h1>
+      <button id="btn-leave-room" class="ghost small">Leave</button>
+    </div>
+
+    <div id="perm-card" class="card warn">
+      <p id="perm-text">Enable location (and compass) so the game can work. Keep this page open during the game.</p>
+      <button id="btn-perms" class="primary">Enable location &amp; compass</button>
+    </div>
+    <p id="gps-status" class="muted small-text"></p>
+
+    <div class="card">
+      <h2>Players</h2>
+      <p id="host-hint" class="muted small-text hidden">You're the host: choose who is a hider and who is a seeker.</p>
+      <div id="roster"></div>
+    </div>
+
+    <div class="card">
+      <h2>Settings</h2>
+      <div id="settings" class="settings"></div>
+    </div>
+
+    <div class="sticky-bottom">
+      <p id="start-problem" class="muted small-text"></p>
+      <button id="btn-start" class="primary big hidden">Start game</button>
+      <p id="wait-host" class="muted hidden">Waiting for the host to start…</p>
+    </div>
+  </section>
+
+  <!-- GAME -->
+  <section id="screen-game" class="screen game hidden">
+    <div class="topbar">
+      <span id="team-badge" class="badge">—</span>
+      <span id="timer" class="timer">--:--</span>
+      <span id="hiders-left" class="muted small-text"></span>
+    </div>
+
+    <!-- hider HUD -->
+    <div id="hider-hud" class="hud hidden">
+      <div class="label">Nearest seeker</div>
+      <div id="seeker-dist" class="bignum">—</div>
+      <div id="seeker-dist-age" class="muted small-text"></div>
+    </div>
+
+    <!-- seeker HUD -->
+    <div id="seeker-hud" class="hud seeker hidden">
+      <div id="headstart" class="headstart hidden">
+        <div class="label">Hiders are hiding…</div>
+        <div id="headstart-timer" class="bignum">--:--</div>
+      </div>
+      <div id="compass-wrap" class="compass-wrap">
+        <svg id="compass" viewBox="-100 -100 200 200" class="compass">
+          <circle r="92" class="dial"/>
+          <g id="dial-ticks"></g>
+          <g id="arrow">
+            <path d="M0,-78 L22,20 L0,6 L-22,20 Z" class="arrow-head"/>
+          </g>
+        </svg>
+        <div class="compass-info">
+          <div class="label">Nearest hider</div>
+          <div id="hider-dist" class="bignum">—</div>
+          <div id="compass-note" class="muted small-text"></div>
+        </div>
+      </div>
+      <button id="btn-catch" class="danger big">Caught someone!</button>
+    </div>
+
+    <div id="map" class="map"></div>
+    <div class="game-footer">
+      <span id="gps-warn" class="warn-text hidden">Weak GPS signal</span>
+      <span id="map-age" class="muted small-text"></span>
+      <button id="btn-leave-game" class="ghost small">Quit</button>
+    </div>
+  </section>
+
+  <!-- RESULTS -->
+  <section id="screen-results" class="screen hidden">
+    <h1 id="result-title">Game over</h1>
+    <div class="card">
+      <div class="row-between">
+        <h2>Where is everyone?</h2>
+        <span id="end-map-age" class="muted small-text"></span>
+      </div>
+      <p class="muted small-text">Everyone's location is now visible. Tap someone to send them a message.</p>
+      <!-- the game's #map element is moved in here when the game ends -->
+      <div id="end-map-slot" class="end-map-slot"></div>
+    </div>
+    <div class="card">
+      <h2>What happened</h2>
+      <ul id="result-events" class="list"></ul>
+    </div>
+    <div class="card">
+      <h2>Players</h2>
+      <ul id="result-players" class="list"></ul>
+    </div>
+    <button id="btn-home" class="primary big">Back to lobbies</button>
+  </section>
+
+  <!-- MODAL -->
+  <div id="modal" class="modal hidden">
+    <div class="modal-box">
+      <h2 id="modal-title"></h2>
+      <div id="modal-body"></div>
+      <div id="modal-actions" class="modal-actions"></div>
+    </div>
+  </div>
+
+  <div id="toasts" class="toasts"></div>
+
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.min.js"></script>
+  <script src="geo.js"></script>
+  <script src="map.js"></script>
+  <script src="app.js"></script>
+</body>
+</html>
